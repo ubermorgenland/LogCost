@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: logcost-example
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: logcost-example
+  template:
+    metadata:
+      labels:
+        app: logcost-example
+    spec:
+      containers:
+        - name: app
+          image: your-registry/your-app:latest
+          env:
+            - name: LOGCOST_OUTPUT
+              value: /var/log/logcost/stats.json
+          volumeMounts:
+            - name: logcost-data
+              mountPath: /var/log/logcost
+        - name: logcost-sidecar
+          image: python:3.9-slim
+          command:
+            - python
+            - -m
+            - logcost.cli
+            - capture
+            - /var/log/logcost/stats.json
+          volumeMounts:
+            - name: logcost-data
+              mountPath: /var/log/logcost
+      volumes:
+        - name: logcost-data
+          emptyDir: {}

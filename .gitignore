@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+*.log
+outputs/
+.pytest_cache/
+.coverage
+*.egg-info/
+build/
+dist/
+test_flask_demo.py

@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "logcost"
+version = "0.1.0"
+description = "Measure and analyze Python logging costs"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "LogCost Contributors" }]
+dependencies = []
+
+[tool.setuptools.packages.find]
+include = ["logcost"]
