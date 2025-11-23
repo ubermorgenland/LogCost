@@ -10,3 +10,4 @@ outputs/
 build/
 dist/
 test_flask_demo.py
+PROJECT_OUTLINE.md
