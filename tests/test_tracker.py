@@ -164,3 +164,22 @@ def test_skip_module_prefix_finds_real_caller():
     log_helper.log_via_helper(tracker, "second")
     entry = next(iter(tracker.get_stats().values()))
     assert entry["file"].endswith("tests/test_tracker.py")
+
+
+def test_skip_module_limit(monkeypatch):
+    tracker = LogCostTracker()
+    tracker._skip_module_prefixes = set()
+    tracker._max_skip_prefixes = 2
+    tracker.add_skip_module("module.one")
+    tracker.add_skip_module("module.two")
+    with pytest.warns(RuntimeWarning):
+        tracker.add_skip_module("module.three")
+    assert len(tracker._skip_module_prefixes) == 2
+
+
+def test_stack_depth_limit_results_in_unknown_file():
+    tracker = LogCostTracker()
+    tracker._max_stack_depth = 1
+    tracker._track_call(logging.INFO, "depth test", ())
+    entry = next(iter(tracker.get_stats().values()))
+    assert entry["file"] == "unknown"

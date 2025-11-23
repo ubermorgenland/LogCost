@@ -11,9 +11,13 @@ import inspect
 import json
 import os
 import tempfile
+import warnings
 from pathlib import Path
 from threading import Lock
 from typing import Dict, Optional
+
+PRINT_LEVEL = logging.INFO + 5
+logging.addLevelName(PRINT_LEVEL, "PRINT")
 
 
 class LogCostTracker:
@@ -26,7 +30,13 @@ class LogCostTracker:
         self._original_print = None
         self._installed = False
         self._skip_module_prefixes = {"logging", __name__}
-        self._skip_path_suffixes = {"logging/__init__.py", "logcost/tracker.py"}
+        self._skip_path_suffixes = {
+            "logging/__init__.py",
+            "logcost/tracker.py",
+            "importlib",
+        }
+        self._max_skip_prefixes = 64
+        self._max_stack_depth = 25
 
     def install(self):
         """Monkey-patch logging.Logger._log to track calls."""
@@ -58,8 +68,8 @@ class LogCostTracker:
                     message = sep.join(str(arg) for arg in args) + end
                 except Exception:
                     message = " ".join(str(arg) for arg in args)
-                # Record as a PRINT level
-                self._track_call("PRINT", message, ())
+                # Record as a PRINT level and keep level numeric for consistency
+                self._track_call(PRINT_LEVEL, message, ())
                 return self._original_print(*args, **kwargs)
 
             builtins.print = tracked_print
@@ -76,7 +86,9 @@ class LogCostTracker:
 
             # Walk up the stack looking for user code
             current = frame
-            while current:
+            depth = 0
+            while current and depth < self._max_stack_depth:
+                depth += 1
                 filename = current.f_code.co_filename
                 module_name = current.f_globals.get("__name__", "")
                 skip_logging = any(
@@ -85,9 +97,10 @@ class LogCostTracker:
                     if module_name
                 )
                 skip_structures = any(
-                    filename.endswith(suffix) for suffix in self._skip_path_suffixes
+                    filename.endswith(suffix) or suffix in filename
+                    for suffix in self._skip_path_suffixes
                 )
-                if not (skip_logging or skip_structures or "importlib" in filename):
+                if not (skip_logging or skip_structures):
                     caller_frame = current
                     break
                 current = current.f_back
@@ -120,12 +133,16 @@ class LogCostTracker:
             msg_key = str(msg)[:50] if msg else ""
             key = f"{file_path}:{line_no}|{level_name}|{msg_key}"
 
-            # Estimate bytes
-            # Format the message with args to get actual size
+            # Estimate bytes. If there are args, try formatting to capture the
+            # actual serialized size; otherwise fall back to the template string.
             if args:
                 try:
                     formatted_msg = str(msg) % args
                 except (TypeError, ValueError):
+                    # Intentionally swallow format errors to avoid breaking user
+                    # logging. Emitting a warning would risk recursion (tracker
+                    # logging about itself) and add hot-path overhead; instead
+                    # we fall back to the raw template for a best-effort count.
                     formatted_msg = str(msg)
             else:
                 formatted_msg = str(msg)
@@ -196,8 +213,18 @@ class LogCostTracker:
 
     def add_skip_module(self, module_prefix: str):
         """Skip module prefixes when determining the caller."""
-        if module_prefix:
-            self._skip_module_prefixes.add(module_prefix)
+        if not module_prefix:
+            return
+        if module_prefix in self._skip_module_prefixes:
+            return
+        if len(self._skip_module_prefixes) >= self._max_skip_prefixes:
+            warnings.warn(
+                "Maximum number of skip modules reached; ignoring additional entries.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return
+        self._skip_module_prefixes.add(module_prefix)
 
 
 # Global tracker instance
