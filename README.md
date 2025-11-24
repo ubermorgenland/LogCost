@@ -1,6 +1,10 @@
 # LogCost
 
-Open-source runtime logging cost tracker for Python services. Drop-in instrumentation (just `import logcost`) that measures which log statements generate the most data and helps you cut cloud logging bills.
+**Your cloud logging bill is $2,000/month. One debug statement in a hot path is responsible for $800 of it.**
+
+LogCost finds expensive log statements in production Python services. Drop-in instrumentation (just `import logcost`) pinpoints which lines generate the most data, helping you cut cloud logging costs by 40-60% without guessing.
+
+**Example:** A single `logger.debug(f"Processing {user_data}")` inside a request loop can log 50 MB/day at $15/month. LogCost shows you the exact file:line, call count, and bytes so you can fix the top 5 offenders and save hundreds monthly.
 
 ## Features
 
@@ -98,6 +102,52 @@ Or use the CLI:
 ```bash
 python -m logcost.cli capture /tmp/logcost_stats.json
 ```
+
+### Slack Notifications
+
+Get proactive alerts about logging costs in your Slack channel:
+
+**Setup:**
+1. Create a Slack Incoming Webhook:
+   - Go to https://api.slack.com/messaging/webhooks
+   - Click "Create your Slack app" → "Incoming Webhooks"
+   - Activate and create a webhook for your channel
+   - Copy the webhook URL (e.g., `https://hooks.slack.com/services/T00.../B00.../XXX...`)
+
+2. Configure environment variables:
+```bash
+export LOGCOST_SLACK_WEBHOOK="https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+export LOGCOST_PROVIDER="gcp"  # or "aws", "azure"
+export LOGCOST_NOTIFICATION_TOP_N="5"  # number of top logs to show
+```
+
+**Usage:**
+
+Automatic notifications with periodic flush:
+```python
+import logcost
+
+# Start periodic flush - automatically sends Slack notifications
+logcost.start_periodic_flush("/var/log/logcost/stats.json")
+# Notifications sent every 5 minutes (configurable via LOGCOST_FLUSH_INTERVAL)
+```
+
+Manual notification:
+```python
+import logcost
+from logcost import send_notification_if_configured
+
+stats = logcost.get_stats()
+send_notification_if_configured(stats)  # Uses LOGCOST_SLACK_WEBHOOK env var
+```
+
+**Notification includes:**
+- Total logging cost and volume
+- Top N most expensive log statements with file:line references
+- Anti-pattern warnings (DEBUG in production, high-frequency loops, large payloads)
+- Week-over-week trend (if available)
+
+**Security Note:** The webhook URL is a credential - treat it like a password. Never commit it to version control. Use environment variables, Kubernetes secrets, or secrets managers.
 
 ## CLI Commands
 
@@ -206,33 +256,91 @@ python -m logcost.cli capture /tmp/django_logcost.json
 
 See `examples/django_app/` for full setup.
 
-### Kubernetes
+### Docker & Kubernetes (Sidecar Pattern)
 
-Mount a writable volume:
+For production deployments, LogCost uses a sidecar architecture that separates logging from monitoring:
+
+**Architecture:**
+- **App Container**: Your application with LogCost library installed, writes stats to shared volume
+- **Sidecar Container**: LogCost monitoring container that watches stats, aggregates data, stores history, and sends notifications
+
+**Benefits:** Separation of concerns, reusable sidecar, no application code changes after setup
+
+#### Build Docker Image
+
+```bash
+cd LogCost/
+docker build -t logcost/logcost:latest .
+```
+
+#### Kubernetes Deployment
+
+Add LogCost sidecar to your deployment:
 
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: myapp
+  name: myapp-with-logcost
 spec:
   template:
     spec:
       containers:
+      # Your application
       - name: app
-        image: myapp:latest
-        volumeMounts:
-        - name: logcost-data
-          mountPath: /var/log/logcost
+        image: your-registry/myapp:latest
         env:
         - name: LOGCOST_OUTPUT
           value: /var/log/logcost/stats.json
+        - name: LOGCOST_FLUSH_INTERVAL
+          value: "300"  # 5 minutes
+        volumeMounts:
+        - name: logcost-data
+          mountPath: /var/log/logcost
+
+      # LogCost sidecar
+      - name: logcost-sidecar
+        image: logcost/logcost:latest
+        env:
+        - name: LOGCOST_NOTIFICATION_INTERVAL
+          value: "3600"  # 1 hour
+        - name: LOGCOST_PROVIDER
+          value: gcp  # or aws, azure
+        - name: LOGCOST_SLACK_WEBHOOK
+          valueFrom:
+            secretKeyRef:
+              name: logcost-slack-webhook
+              key: webhook-url
+        volumeMounts:
+        - name: logcost-data
+          mountPath: /var/log/logcost
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+
       volumes:
       - name: logcost-data
         emptyDir: {}
 ```
 
-Export stats via sidecar or periodic job. See `examples/kubernetes/` for manifests.
+Your app code needs one line:
+
+```python
+import logcost
+logcost.start_periodic_flush("/var/log/logcost/stats.json")
+```
+
+The sidecar will automatically:
+- Watch for stats updates
+- Store historical snapshots (7 days retention)
+- Send hourly Slack notifications with trends
+- Detect anti-patterns (DEBUG in production, high-frequency logs, large payloads)
+
+See `examples/kubernetes/` for complete manifests and setup instructions.
 
 ## Cost Calculation
 

@@ -12,8 +12,9 @@ import json
 import os
 import tempfile
 import warnings
+import time
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread, Event
 from typing import Dict, Optional
 
 PRINT_LEVEL = logging.INFO + 5
@@ -37,6 +38,15 @@ class LogCostTracker:
         }
         self._max_skip_prefixes = 64
         self._max_stack_depth = 25
+
+        # Periodic flush and rotation configuration
+        self._flush_interval = int(os.getenv("LOGCOST_FLUSH_INTERVAL", "300"))  # 5 minutes default
+        self._max_file_size = int(os.getenv("LOGCOST_MAX_FILE_SIZE", str(10 * 1024 * 1024)))  # 10MB default
+        self._max_backups = int(os.getenv("LOGCOST_MAX_BACKUPS", "5"))
+        self._flush_thread: Optional[Thread] = None
+        self._flush_stop_event = Event()
+        self._auto_flush_enabled = False
+        self._output_path: Optional[str] = None
 
     def install(self):
         """Monkey-patch logging.Logger._log to track calls."""
@@ -226,6 +236,96 @@ class LogCostTracker:
             return
         self._skip_module_prefixes.add(module_prefix)
 
+    def _send_notification_if_configured(self):
+        """Send notification if webhook is configured via environment variable."""
+        try:
+            # Import here to avoid circular dependency
+            from .notifiers import send_notification_if_configured
+
+            stats = self.get_stats()
+            if stats:
+                send_notification_if_configured(stats)
+        except Exception:
+            # Silently fail to avoid breaking the application
+            pass
+
+    def _rotate_file(self, output_path: str):
+        """Rotate log file if it exceeds max size."""
+        output_file = Path(output_path)
+        if not output_file.exists():
+            return
+
+        file_size = output_file.stat().st_size
+        if file_size < self._max_file_size:
+            return
+
+        # Rotate: file.json -> file.json.1, file.json.1 -> file.json.2, etc.
+        for i in range(self._max_backups - 1, 0, -1):
+            old_backup = Path(f"{output_path}.{i}")
+            new_backup = Path(f"{output_path}.{i + 1}")
+            if old_backup.exists():
+                if new_backup.exists():
+                    new_backup.unlink()
+                old_backup.rename(new_backup)
+
+        # Move current file to .1
+        backup = Path(f"{output_path}.1")
+        if backup.exists():
+            backup.unlink()
+        output_file.rename(backup)
+
+    def _periodic_flush_worker(self):
+        """Background worker that periodically flushes stats to disk."""
+        while not self._flush_stop_event.wait(self._flush_interval):
+            try:
+                if self._output_path and self._installed:
+                    self._rotate_file(self._output_path)
+                    self.export(self._output_path)
+
+                    # Send notification if configured
+                    self._send_notification_if_configured()
+            except Exception:
+                # Silently fail to avoid breaking the application
+                pass
+
+    def start_periodic_flush(self, output_path: Optional[str] = None):
+        """Start periodic flushing of stats to disk.
+
+        Args:
+            output_path: Path to write stats. Uses LOGCOST_OUTPUT env var if not provided.
+        """
+        if self._auto_flush_enabled:
+            return  # Already running
+
+        if output_path is None:
+            output_path = os.getenv("LOGCOST_OUTPUT", "/tmp/logcost_stats.json")
+
+        self._output_path = output_path
+        self._auto_flush_enabled = True
+        self._flush_stop_event.clear()
+
+        self._flush_thread = Thread(target=self._periodic_flush_worker, daemon=True)
+        self._flush_thread.start()
+
+    def stop_periodic_flush(self):
+        """Stop periodic flushing and perform final export."""
+        if not self._auto_flush_enabled:
+            return
+
+        self._auto_flush_enabled = False
+        self._flush_stop_event.set()
+
+        if self._flush_thread:
+            self._flush_thread.join(timeout=5.0)
+            self._flush_thread = None
+
+        # Final flush
+        if self._output_path and self._installed:
+            try:
+                self.export(self._output_path)
+            except Exception:
+                pass
+
 
 # Global tracker instance
 _tracker = LogCostTracker()
@@ -256,6 +356,31 @@ def ignore_module(module_prefix: str):
     _tracker.add_skip_module(module_prefix)
 
 
+def start_periodic_flush(output_path: Optional[str] = None):
+    """Start periodic flushing of stats to disk.
+
+    Useful for long-running services to avoid data loss. If configured,
+    this will also send notifications to Slack after each flush.
+
+    Args:
+        output_path: Path to write stats. Uses LOGCOST_OUTPUT env var if not provided.
+
+    Environment variables:
+        LOGCOST_FLUSH_INTERVAL: Seconds between flushes (default: 300)
+        LOGCOST_MAX_FILE_SIZE: Max file size in bytes before rotation (default: 10MB)
+        LOGCOST_MAX_BACKUPS: Number of backup files to keep (default: 5)
+        LOGCOST_SLACK_WEBHOOK: Slack webhook URL for notifications (optional)
+        LOGCOST_PROVIDER: Cloud provider for cost calculation (gcp/aws/azure, default: gcp)
+        LOGCOST_NOTIFICATION_TOP_N: Number of top logs to include in notification (default: 5)
+    """
+    _tracker.start_periodic_flush(output_path)
+
+
+def stop_periodic_flush():
+    """Stop periodic flushing and perform final export."""
+    _tracker.stop_periodic_flush()
+
+
 # Auto-install on shutdown
 import atexit
-atexit.register(lambda: _tracker.export() if _tracker._installed else None)
+atexit.register(lambda: _tracker.stop_periodic_flush() if _tracker._auto_flush_enabled else (_tracker.export() if _tracker._installed else None))

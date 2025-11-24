@@ -1,37 +1,127 @@
+# LogCost Kubernetes Deployment with Sidecar Pattern
+#
+# This example shows how to deploy LogCost alongside your application using
+# the sidecar pattern. The architecture is:
+#
+# 1. App Container: Your application with LogCost library installed
+#    - Imports logcost and writes stats to /var/log/logcost/stats.json
+#    - Focuses on business logic, minimal overhead
+#
+# 2. Sidecar Container: LogCost monitoring container
+#    - Watches the shared stats file
+#    - Aggregates data over time
+#    - Stores historical snapshots (7 days default)
+#    - Sends periodic Slack notifications (1 hour default)
+#
+# Benefits:
+# - Separation of concerns: app logs, sidecar reports
+# - Reusable sidecar across all applications
+# - No application code changes needed after initial setup
+
+---
+# Secret for Slack webhook URL
+# Create this before deploying:
+# kubectl create secret generic logcost-slack-webhook \
+#   --from-literal=webhook-url='https://hooks.slack.com/services/YOUR/WEBHOOK/URL'
+apiVersion: v1
+kind: Secret
+metadata:
+  name: logcost-slack-webhook
+  namespace: default
+type: Opaque
+stringData:
+  webhook-url: "https://hooks.slack.com/services/TXXXXXXXX/BXXXXXXXX/XXXXXXXXXXXXXXXXXXXXXXXX"
+
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: logcost-example
+  name: myapp-with-logcost
+  namespace: default
+  labels:
+    app: myapp
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
-      app: logcost-example
+      app: myapp
   template:
     metadata:
       labels:
-        app: logcost-example
+        app: myapp
     spec:
       containers:
-        - name: app
-          image: your-registry/your-app:latest
-          env:
-            - name: LOGCOST_OUTPUT
-              value: /var/log/logcost/stats.json
-          volumeMounts:
-            - name: logcost-data
-              mountPath: /var/log/logcost
-        - name: logcost-sidecar
-          image: python:3.9-slim
-          command:
-            - python
-            - -m
-            - logcost.cli
-            - capture
-            - /var/log/logcost/stats.json
-          volumeMounts:
-            - name: logcost-data
-              mountPath: /var/log/logcost
-      volumes:
+      # Your application container
+      - name: app
+        image: your-registry/myapp:latest
+        ports:
+        - containerPort: 8080
+        env:
+        # Configure LogCost periodic flush in your app
+        - name: LOGCOST_OUTPUT
+          value: /var/log/logcost/stats.json
+        - name: LOGCOST_FLUSH_INTERVAL
+          value: "300"  # 5 minutes
+        - name: LOGCOST_MAX_FILE_SIZE
+          value: "10485760"  # 10MB
+        volumeMounts:
         - name: logcost-data
-          emptyDir: {}
+          mountPath: /var/log/logcost
+        # Your app code should include:
+        # import logcost
+        # logcost.start_periodic_flush("/var/log/logcost/stats.json")
+
+      # LogCost sidecar container
+      - name: logcost-sidecar
+        image: logcost/logcost:latest
+        env:
+        # Sidecar configuration
+        - name: LOGCOST_WATCH_PATH
+          value: /var/log/logcost/stats.json
+        - name: LOGCOST_NOTIFICATION_INTERVAL
+          value: "3600"  # 1 hour between notifications
+        - name: LOGCOST_HISTORY_DIR
+          value: /var/log/logcost/history
+        - name: LOGCOST_HISTORY_RETENTION
+          value: "7"  # Keep 7 days of history
+        - name: LOGCOST_PROVIDER
+          value: gcp  # or "aws", "azure"
+        - name: LOGCOST_NOTIFICATION_TOP_N
+          value: "5"  # Show top 5 expensive logs
+        # Slack webhook from secret
+        - name: LOGCOST_SLACK_WEBHOOK
+          valueFrom:
+            secretKeyRef:
+              name: logcost-slack-webhook
+              key: webhook-url
+        volumeMounts:
+        - name: logcost-data
+          mountPath: /var/log/logcost
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+
+      # Shared volume for stats file
+      volumes:
+      - name: logcost-data
+        emptyDir: {}
+
+---
+# Example Service (optional)
+apiVersion: v1
+kind: Service
+metadata:
+  name: myapp
+  namespace: default
+spec:
+  selector:
+    app: myapp
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8080
+  type: LoadBalancer

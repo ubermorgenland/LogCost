@@ -18,9 +18,21 @@ Docs: https://logcost.io/docs
 
 __version__ = "0.1.0"
 
-from .tracker import install, export, get_stats, reset, ignore_module
+from .tracker import (
+    install,
+    export,
+    get_stats,
+    reset,
+    ignore_module,
+    start_periodic_flush,
+    stop_periodic_flush,
+)
 from .analyzer import CostAnalyzer
 from .exporters import export_csv, export_prometheus, render_html_report
+from .notifiers import (
+    send_slack_notification,
+    send_notification_if_configured,
+)
 
 # Auto-install on import (the magic!)
 install()
@@ -31,8 +43,12 @@ __all__ = [
     "get_stats",
     "reset",
     "ignore_module",
+    "start_periodic_flush",
+    "stop_periodic_flush",
     "CostAnalyzer",
     "export_csv",
     "export_prometheus",
     "render_html_report",
+    "send_slack_notification",
+    "send_notification_if_configured",
 ]
