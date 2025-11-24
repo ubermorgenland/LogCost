@@ -266,12 +266,31 @@ For production deployments, LogCost uses a sidecar architecture that separates l
 
 **Benefits:** Separation of concerns, reusable sidecar, no application code changes after setup
 
-#### Build Docker Image
+#### Build and Publish Docker Image
 
+Build locally:
 ```bash
 cd LogCost/
 docker build -t logcost/logcost:latest .
 ```
+
+Publish to Docker Hub (requires Docker Hub account):
+```bash
+# Login to Docker Hub
+docker login
+
+# Build and push
+docker build -t your-username/logcost:latest .
+docker push your-username/logcost:latest
+
+# Or build for multiple architectures (recommended)
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t your-username/logcost:latest \
+  -t your-username/logcost:v0.1.0 \
+  --push .
+```
+
+See [DOCKER.md](DOCKER.md) for complete publishing guide including GitHub Actions automation, other registries (GCR, ECR, ACR), security scanning, and versioning strategy.
 
 #### Kubernetes Deployment
 
