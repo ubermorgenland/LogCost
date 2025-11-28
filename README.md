@@ -40,6 +40,54 @@ Analyze the results:
 python -m logcost.cli analyze /tmp/logcost_stats.json --provider gcp --top 5
 ```
 
+**Example Output:**
+
+```
+╭─ LogCost Report ───────────────────────────────────────────────╮
+│                                                                 │
+│  💰 Total Cost:     $450.00/month                              │
+│  📊 Total Data:     900 GB                                     │
+│  📈 Total Calls:    2,847,000                                  │
+│  📅 Period:         Last 30 days                               │
+│                                                                 │
+├─ Top 5 Most Expensive Logs ────────────────────────────────────┤
+│                                                                 │
+│ 1. src/memory_utils.py:338        ███████████ $157.50 (35%)   │
+│    DEBUG: Processing step: %s                                  │
+│    315 GB over 1.2M calls (debug in hot loop!)                │
+│                                                                 │
+│ 2. _trace.py:87                   █████████ $112.50 (25%)     │
+│    connect_tcp.started host='api.github...'                    │
+│    225 GB over 2.8M calls (HTTP library tracing)              │
+│                                                                 │
+│ 3. _base_client.py:452            ██████ $67.50 (15%)         │
+│    Request options: %s                                         │
+│    135 GB over 8,400 calls (Anthropic SDK)                     │
+│                                                                 │
+│ 4. connectionpool.py:544          ████ $45.00 (10%)           │
+│    %s://%s:%s "%s %s %s" %s %s                                │
+│    90 GB over 1.1M calls (urllib3 tracing)                     │
+│                                                                 │
+│ 5. streamable_http.py:385         ████ $67.50 (15%)           │
+│    Sending client message: root=JSONRPCRequest...             │
+│    135 GB over 850k calls (streaming output)                   │
+│                                                                 │
+├─ 💡 Recommendations ───────────────────────────────────────────┤
+│                                                                 │
+│ 🚨 QUICK WINS - Potential savings:                             │
+│                                                                 │
+│    Remove DEBUG from loop (src/memory_utils.py:338)            │
+│    ➜ Save: $157.50/month (35% reduction)                      │
+│                                                                 │
+│    Silence httpcore.DEBUG logging                              │
+│    ➜ Save: $112.50/month (25% reduction)                      │
+│                                                                 │
+│ 📈 TOTAL POSSIBLE MONTHLY SAVINGS: $270.00                     │
+│    📊 Annual Impact: $3,240 cost reduction                     │
+│                                                                 │
+╰─────────────────────────────────────────────────────────────────╯
+```
+
 ## Installation
 
 ```bash
@@ -170,6 +218,57 @@ send_notification_if_configured(stats)  # Uses LOGCOST_SLACK_WEBHOOK env var
 - Top N most expensive log statements with file:line references
 - Anti-pattern warnings (DEBUG in production, high-frequency loops, large payloads)
 - Week-over-week trend (if available)
+
+**Example Slack Notification:**
+
+```
+🚨 LogCost Hourly Report - Production (Last 1 hour)
+
+💰 COST SNAPSHOT
+  Total Cost:    $18.75/hour ($450/month projected)
+  Total Data:    37.5 GB/hour
+  Total Calls:   118,625
+  Trend:         ↑ +12% vs last hour
+
+📊 TOP 5 EXPENSIVE LOGS
+  1️⃣  src/memory_utils.py:338
+     DEBUG: Processing step: %s
+     13.1 GB  |  $6.56  |  50k calls
+     🔴 Anti-pattern: DEBUG in hot loop!
+
+  2️⃣  _trace.py:87
+     connect_tcp.started host='api.github...'
+     9.4 GB  |  $4.69  |  117k calls
+     🟡 High-frequency: HTTP tracing library
+
+  3️⃣  _base_client.py:452
+     Request options: %s
+     5.6 GB  |  $2.81  |  350 calls
+     Anthropic SDK request logging
+
+  4️⃣  connectionpool.py:544
+     %s://%s:%s "%s %s %s" %s %s
+     3.75 GB  |  $1.88  |  45k calls
+     urllib3 connection pool logging
+
+  5️⃣  streamable_http.py:385
+     Sending client message: root=JSONRPCRequest...
+     5.6 GB  |  $2.81  |  35k calls
+     Large payload streaming logs
+
+🎯 QUICK WINS - Potential Savings
+  → Remove DEBUG from memory_utils.py:338
+     Potential: $6.56/hour ($157.50/month)
+
+  → Silence httpcore.DEBUG logging
+     Potential: $4.69/hour ($112.50/month)
+
+💡 Total Possible Monthly Savings: $270/month
+   (Annual Impact: $3,240)
+
+📈 Week-over-Week: $450 → $505 (+12%)
+   ⚠️  Trending upward. Review high-frequency logs.
+```
 
 **Security Note:** The webhook URL is a credential - treat it like a password. Never commit it to version control. Use environment variables, Kubernetes secrets, or secrets managers.
 
