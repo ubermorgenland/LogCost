@@ -19,6 +19,8 @@ from pathlib import Path
 from threading import Lock, Thread, Event
 from typing import Dict, Optional
 
+from .utils import get_env_int, get_env_int_or_none
+
 PRINT_LEVEL = logging.INFO + 5
 logging.addLevelName(PRINT_LEVEL, "PRINT")
 
@@ -45,13 +47,19 @@ class LogCostTracker:
         self._thread_local = threading.local()
 
         # Periodic flush and rotation configuration
-        self._flush_interval = int(os.getenv("LOGCOST_FLUSH_INTERVAL", "300"))  # 5 minutes default
-        self._max_file_size = int(os.getenv("LOGCOST_MAX_FILE_SIZE", str(10 * 1024 * 1024)))  # 10MB default
-        self._max_backups = int(os.getenv("LOGCOST_MAX_BACKUPS", "5"))
+        self._flush_interval = get_env_int("LOGCOST_FLUSH_INTERVAL", 300)  # 5 minutes default
+        self._max_file_size = get_env_int("LOGCOST_MAX_FILE_SIZE", 10 * 1024 * 1024)  # 10MB default
+        self._max_backups = get_env_int("LOGCOST_MAX_BACKUPS", 5)
         self._flush_thread: Optional[Thread] = None
         self._flush_stop_event = Event()
         self._auto_flush_enabled = False
         self._output_path: Optional[str] = None
+        self._notification_interval = get_env_int("LOGCOST_NOTIFICATION_INTERVAL", 3600)
+        self._notification_last_sent = 0.0
+        test_delay = get_env_int_or_none("LOGCOST_NOTIFICATION_TEST_DELAY")
+        self._notification_test_delay = test_delay if test_delay is not None else -1
+        self._notification_test_sent = False
+        self._start_time = time.time()
 
     def install(self):
         """Monkey-patch logging.Logger._log to track calls."""
@@ -286,7 +294,7 @@ class LogCostTracker:
             return
         self._skip_module_prefixes.add(module_prefix)
 
-    def _send_notification_if_configured(self):
+    def _send_notification_if_configured(self, test_notification: bool = False):
         """Send notification if webhook is configured via environment variable."""
         try:
             # Import here to avoid circular dependency
@@ -294,7 +302,7 @@ class LogCostTracker:
 
             stats = self.get_stats()
             if stats:
-                send_notification_if_configured(stats)
+                send_notification_if_configured(stats, test_notification=test_notification)
         except Exception:
             # Silently fail to avoid breaking the application
             pass
@@ -332,8 +340,26 @@ class LogCostTracker:
                     self._rotate_file(self._output_path)
                     self.export(self._output_path)
 
-                    # Send notification if configured
-                    self._send_notification_if_configured()
+                    # Notification cadence
+                    now = time.time()
+                    send_notification = False
+                    test_notification = False
+
+                    if (
+                        not self._notification_test_sent
+                        and self._notification_test_delay >= 0
+                        and now - self._start_time >= self._notification_test_delay
+                    ):
+                        send_notification = True
+                        test_notification = True
+                        self._notification_test_sent = True
+
+                    if now - self._notification_last_sent >= self._notification_interval:
+                        send_notification = True
+
+                    if send_notification:
+                        self._send_notification_if_configured(test_notification=test_notification)
+                        self._notification_last_sent = now
             except Exception:
                 # Silently fail to avoid breaking the application
                 pass

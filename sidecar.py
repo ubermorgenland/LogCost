@@ -28,6 +28,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Optional
 
+from logcost.utils import get_env_int
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -41,12 +43,12 @@ class LogCostSidecar:
 
     def __init__(self):
         self.watch_path = Path(os.getenv("LOGCOST_WATCH_PATH", "/var/log/logcost/stats.json"))
-        self.notification_interval = int(os.getenv("LOGCOST_NOTIFICATION_INTERVAL", "3600"))
+        self.notification_interval = get_env_int("LOGCOST_NOTIFICATION_INTERVAL", 3600)
         self.history_dir = Path(os.getenv("LOGCOST_HISTORY_DIR", "/var/log/logcost/history"))
-        self.history_retention_days = int(os.getenv("LOGCOST_HISTORY_RETENTION", "7"))
+        self.history_retention_days = get_env_int("LOGCOST_HISTORY_RETENTION", 7)
         self.slack_webhook = os.getenv("LOGCOST_SLACK_WEBHOOK")
         self.provider = os.getenv("LOGCOST_PROVIDER", "gcp")
-        self.top_n = int(os.getenv("LOGCOST_NOTIFICATION_TOP_N", "5"))
+        self.top_n = get_env_int("LOGCOST_NOTIFICATION_TOP_N", 5)
 
         # Create history directory
         self.history_dir.mkdir(parents=True, exist_ok=True)
