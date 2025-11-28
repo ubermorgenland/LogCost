@@ -139,9 +139,9 @@ class LogCostTracker:
                 level_name = level
             else:
                 level_name = logging.getLevelName(level)
-            # Truncate message for key (first 50 chars)
-            msg_key = str(msg)[:50] if msg else ""
-            key = f"{file_path}:{line_no}|{level_name}|{msg_key}"
+            # Aggregate by file:line:level only (not by message content)
+            # This ensures all logs from the same line are counted together
+            key = f"{file_path}:{line_no}|{level_name}"
 
             # Estimate bytes. If there are args, try formatting to capture the
             # actual serialized size; otherwise fall back to the template string.
