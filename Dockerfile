@@ -5,7 +5,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install only runtime dependencies (no dev tools)
-COPY setup.py README.md ./
+COPY pyproject.toml README.md ./
 COPY logcost ./logcost
 
 # Install in production mode
