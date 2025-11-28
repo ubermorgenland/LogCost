@@ -28,7 +28,7 @@ Instead of wondering where your logging costs go, LogCost shows the exact file:l
 ## Quick Start
 
 ```bash
-pip install -e .
+pip install logcost
 ```
 
 ```python
@@ -75,8 +75,15 @@ Recommendations:
 
 ## Installation
 
+### From PyPI (Recommended)
+
 ```bash
-# From source
+pip install logcost
+```
+
+### From Source
+
+```bash
 git clone https://github.com/ubermorgenland/LogCost.git
 cd LogCost
 pip install -e .
