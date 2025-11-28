@@ -13,6 +13,8 @@ import os
 import tempfile
 import warnings
 import time
+import threading
+import traceback
 from pathlib import Path
 from threading import Lock, Thread, Event
 from typing import Dict, Optional
@@ -29,6 +31,7 @@ class LogCostTracker:
         self._lock = Lock()
         self._original_log = None
         self._original_print = None
+        self._original_findCaller = None
         self._installed = False
         self._skip_module_prefixes = {"logging", __name__}
         self._skip_path_suffixes = {
@@ -38,6 +41,8 @@ class LogCostTracker:
         }
         self._max_skip_prefixes = 64
         self._max_stack_depth = 25
+        # Thread-local storage for caller frame info
+        self._thread_local = threading.local()
 
         # Periodic flush and rotation configuration
         self._flush_interval = int(os.getenv("LOGCOST_FLUSH_INTERVAL", "300"))  # 5 minutes default
@@ -54,18 +59,54 @@ class LogCostTracker:
             return
 
         self._original_log = logging.Logger._log
+        self._original_findCaller = logging.Logger.findCaller
 
         # Create a wrapper that properly binds to this tracker instance
         tracker = self
         def tracked_log_wrapper(logger_self, level, msg, args, **kwargs):
             """Replacement for Logger._log that tracks the call."""
-            # Track this log call
-            tracker._track_call(level, msg, args)
+            # Get the correct caller frame before logging
+            caller_frame = tracker._get_caller_frame()
 
-            # Call original logging
-            return tracker._original_log(logger_self, level, msg, args, **kwargs)
+            # Store caller info in thread-local so findCaller can use it
+            if caller_frame:
+                tracker._thread_local.caller_filename = caller_frame.f_code.co_filename
+                tracker._thread_local.caller_lineno = caller_frame.f_lineno
+                tracker._thread_local.caller_funcname = caller_frame.f_code.co_name
+
+            try:
+                # Track this log call
+                tracker._track_call(level, msg, args)
+
+                # Call original logging
+                return tracker._original_log(logger_self, level, msg, args, **kwargs)
+            finally:
+                # Clear the thread-local data
+                tracker._thread_local.caller_filename = None
+                tracker._thread_local.caller_lineno = None
+                tracker._thread_local.caller_funcname = None
+
+        # Override findCaller to use our stored caller info instead of inspecting the stack
+        def patched_findCaller(logger_self, stack_info=False, stacklevel=1):
+            """Override findCaller to use the correct caller info from LogCost."""
+            # Check if we have cached caller info from LogCost wrapper
+            if (hasattr(tracker._thread_local, 'caller_filename') and
+                tracker._thread_local.caller_filename is not None):
+                filename = tracker._thread_local.caller_filename
+                lineno = tracker._thread_local.caller_lineno
+                funcname = tracker._thread_local.caller_funcname
+                # Return in the format expected by logging module
+                # (filename, lineno, func_name, stack_info_str)
+                sinfo = None
+                if stack_info:
+                    sinfo = traceback.format_stack(stack_info)  # pragma: no cover
+                return (filename, lineno, funcname, sinfo)
+            else:
+                # Fall back to original if no cached info
+                return tracker._original_findCaller(logger_self, stack_info=stack_info, stacklevel=stacklevel)
 
         logging.Logger._log = tracked_log_wrapper
+        logging.Logger.findCaller = patched_findCaller
 
         if self._original_print is None:
             self._original_print = builtins.print
@@ -86,39 +127,48 @@ class LogCostTracker:
 
         self._installed = True
 
+    def _get_caller_frame(self):
+        """Extract the first frame outside of logging internals.
+
+        Returns the frame object or None if not found.
+        """
+        frame = inspect.currentframe()
+        caller_frame = None
+
+        # Walk up the stack looking for user code
+        current = frame
+        depth = 0
+        while current and depth < self._max_stack_depth:
+            depth += 1
+            filename = current.f_code.co_filename
+            module_name = current.f_globals.get("__name__", "")
+            skip_logging = any(
+                module_name.startswith(prefix)
+                for prefix in self._skip_module_prefixes
+                if module_name
+            )
+            skip_structures = any(
+                filename.endswith(suffix) or suffix in filename
+                for suffix in self._skip_path_suffixes
+            )
+            if not (skip_logging or skip_structures):
+                caller_frame = current
+                break
+            current = current.f_back
+
+        # Avoid reference cycles
+        del frame
+        frame = None
+        del current
+        current = None
+
+        return caller_frame
+
     def _track_call(self, level, msg, args):
         """Track a single log call."""
         try:
             # Find the first frame outside of logging internals
-            # This is more robust than hardcoding frame depth
-            frame = inspect.currentframe()
-            caller_frame = None
-
-            # Walk up the stack looking for user code
-            current = frame
-            depth = 0
-            while current and depth < self._max_stack_depth:
-                depth += 1
-                filename = current.f_code.co_filename
-                module_name = current.f_globals.get("__name__", "")
-                skip_logging = any(
-                    module_name.startswith(prefix)
-                    for prefix in self._skip_module_prefixes
-                    if module_name
-                )
-                skip_structures = any(
-                    filename.endswith(suffix) or suffix in filename
-                    for suffix in self._skip_path_suffixes
-                )
-                if not (skip_logging or skip_structures):
-                    caller_frame = current
-                    break
-                current = current.f_back
-            # Avoid reference cycles
-            del frame
-            frame = None
-            del current
-            current = None
+            caller_frame = self._get_caller_frame()
 
             if caller_frame:
                 file_path = caller_frame.f_code.co_filename
