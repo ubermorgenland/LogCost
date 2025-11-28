@@ -4,7 +4,15 @@
 
 LogCost finds expensive log statements by tracking and aggregating logs at the source code level. Drop-in instrumentation (just `import logcost`) pinpoints which lines generate the most data, helping you cut cloud logging costs by 40-60% without guessing.
 
-**Example:** A single `logger.debug(f"Processing {user_data}")` inside a request loop can log 50 MB/day at $15/month. LogCost shows you the exact file:line, call count, and bytes so you can fix the top 5 offenders and save hundreds monthly.
+**See exactly what's costing you:**
+
+```
+src/memory_utils.py:338
+  DEBUG: Processing step: %s
+  315 GB  |  $157.50  |  1.2M calls
+```
+
+Instead of wondering where your logging costs go, LogCost shows the exact file:line, bytes logged, cost, and call count. Fix the top offenders and save hundreds monthly.
 
 ## Features
 
