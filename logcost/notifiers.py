@@ -11,6 +11,7 @@ from typing import Dict, List, Optional
 from urllib import request, error as urllib_error
 
 from .analyzer import CostAnalyzer
+from .utils import get_env_int
 
 
 def format_bytes(bytes_count: int) -> str:
@@ -34,7 +35,8 @@ def _build_slack_message(
     stats: Dict,
     provider: str = "gcp",
     top_n: int = 5,
-    previous_stats: Optional[Dict] = None
+    previous_stats: Optional[Dict] = None,
+    test_notification: bool = False
 ) -> Dict:
     """Build Slack message payload from LogCost stats.
 
@@ -56,7 +58,8 @@ def _build_slack_message(
     total_calls = sum(entry.count for entry in report.entries)
 
     # Build header
-    header = f"*LogCost Report - {provider.upper()}*\n"
+    header_prefix = "*[Test]* " if test_notification else ""
+    header = f"{header_prefix}*LogCost Report - {provider.upper()}*\n"
     header += f"Total: {format_bytes(total_bytes)} ({format_cost(total_cost)})\n"
     header += f"Log calls: {total_calls:,}\n"
 
@@ -130,8 +133,9 @@ def _build_slack_message(
         ]
     })
 
+    text_prefix = "[Test] " if test_notification else ""
     return {
-        "text": f"LogCost Report - {format_cost(total_cost)} total cost",
+        "text": f"{text_prefix}LogCost Report - {format_cost(total_cost)} total cost",
         "blocks": blocks
     }
 
@@ -141,7 +145,8 @@ def send_slack_notification(
     stats: Dict,
     provider: str = "gcp",
     top_n: int = 5,
-    previous_stats: Optional[Dict] = None
+    previous_stats: Optional[Dict] = None,
+    test_notification: bool = False
 ) -> bool:
     """Send LogCost report to Slack via webhook.
 
@@ -172,7 +177,7 @@ def send_slack_notification(
 
     try:
         # Build message
-        message = _build_slack_message(stats, provider, top_n, previous_stats)
+        message = _build_slack_message(stats, provider, top_n, previous_stats, test_notification)
 
         # Send POST request
         req = request.Request(
@@ -196,7 +201,8 @@ def send_slack_notification(
 def send_notification_if_configured(
     stats: Dict,
     provider: Optional[str] = None,
-    previous_stats: Optional[Dict] = None
+    previous_stats: Optional[Dict] = None,
+    test_notification: bool = False
 ) -> bool:
     """Send notification if webhook URL is configured via environment variable.
 
@@ -223,12 +229,13 @@ def send_notification_if_configured(
     if provider is None:
         provider = os.getenv("LOGCOST_PROVIDER", "gcp")
 
-    top_n = int(os.getenv("LOGCOST_NOTIFICATION_TOP_N", "5"))
+    top_n = get_env_int("LOGCOST_NOTIFICATION_TOP_N", 5)
 
     return send_slack_notification(
         webhook_url,
         stats,
         provider=provider,
         top_n=top_n,
-        previous_stats=previous_stats
+        previous_stats=previous_stats,
+        test_notification=test_notification,
     )

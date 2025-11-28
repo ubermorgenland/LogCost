@@ -15,7 +15,17 @@ from .exporters import export_csv, export_prometheus, render_html_report
 
 
 def _load_stats(path: str) -> dict:
-    return json.loads(Path(path).read_text())
+    try:
+        text = Path(path).read_text()
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"Stats file not found: {path}") from exc
+    except OSError as exc:
+        raise RuntimeError(f"Unable to read stats file {path}: {exc}") from exc
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Failed to parse stats file {path}: {exc}") from exc
 
 
 def _cmd_analyze(args: argparse.Namespace) -> int:
@@ -209,7 +219,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except RuntimeError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

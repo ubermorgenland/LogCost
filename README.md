@@ -194,6 +194,7 @@ import logcost
 logcost.start_periodic_flush("/var/log/logcost/stats.json")
 # Stats flushed every 5 minutes (LOGCOST_FLUSH_INTERVAL=300)
 # Notifications sent every 1 hour (LOGCOST_NOTIFICATION_INTERVAL=3600, configurable)
+# Optional: set LOGCOST_NOTIFICATION_TEST_DELAY (seconds) to send a one-time [Test] message after startup
 ```
 
 Manual notification:
