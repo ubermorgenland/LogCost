@@ -451,7 +451,19 @@ The sidecar will automatically:
 - Send hourly Slack notifications with trends
 - Detect anti-patterns (DEBUG in production, high-frequency logs, large payloads)
 
-See `examples/kubernetes/` for complete manifests and setup instructions.
+**File Permissions (Important):** The sidecar container runs as UID 1000 and needs read access to stats.json. Solution: Use an init container to set up the shared volume with permissive permissions:
+
+```yaml
+initContainers:
+- name: setup-logcost-perms
+  image: busybox:latest
+  command: ['sh', '-c', 'mkdir -p /var/log/logcost && chmod 777 /var/log/logcost']
+  volumeMounts:
+  - name: logcost-data
+    mountPath: /var/log/logcost
+```
+
+This ensures both containers can read/write to the shared volume. See `examples/kubernetes/deployment-with-init-container.yaml` for a complete working example.
 
 ## Cost Calculation
 

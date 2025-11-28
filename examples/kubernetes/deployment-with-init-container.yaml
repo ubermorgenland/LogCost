@@ -1,0 +1,119 @@
+# LogCost Kubernetes Deployment with Init Container
+#
+# This example demonstrates proper file permission setup for the LogCost sidecar pattern.
+# The init container ensures the shared volume has correct permissions so both the
+# main application container and sidecar can read/write to the stats file.
+#
+# Key Pattern:
+# - Init container: Creates /var/log/logcost with permissive permissions (777)
+# - Main container: Writes stats.json to the shared volume
+# - Sidecar container: Reads and processes stats.json
+#
+# This solves the file permission issue where the sidecar (running as UID 1000)
+# cannot read files created by the main app container.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-demo
+  namespace: default
+  labels:
+    app: nginx-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx-demo
+  template:
+    metadata:
+      labels:
+        app: nginx-demo
+    spec:
+      # Init container: Set up shared volume with correct permissions
+      initContainers:
+      - name: setup-logcost-perms
+        image: busybox:latest
+        command:
+        - sh
+        - -c
+        - |
+          mkdir -p /var/log/logcost
+          chmod 777 /var/log/logcost
+          echo "LogCost volume initialized with open permissions"
+        volumeMounts:
+        - name: logcost-data
+          mountPath: /var/log/logcost
+
+      containers:
+      # Main application container
+      - name: nginx
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+          name: http
+        env:
+        # LogCost configuration (for applications that use it)
+        - name: LOGCOST_ENABLED
+          value: 'true'
+        - name: LOGCOST_OUTPUT
+          value: /var/log/logcost/stats.json
+        - name: LOGCOST_FLUSH_INTERVAL
+          value: '300'  # 5 minutes
+        volumeMounts:
+        - name: logcost-data
+          mountPath: /var/log/logcost
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+
+      # LogCost sidecar container
+      - name: logcost-sidecar
+        image: logcost/logcost:latest
+        env:
+        - name: LOGCOST_WATCH_PATH
+          value: /var/log/logcost/stats.json
+        - name: LOGCOST_NOTIFICATION_INTERVAL
+          value: '3600'  # 1 hour between notifications
+        - name: LOGCOST_HISTORY_DIR
+          value: /var/log/logcost/history
+        - name: LOGCOST_PROVIDER
+          value: gcp  # or aws, azure
+        - name: LOGCOST_NOTIFICATION_TOP_N
+          value: '5'
+        - name: LOGCOST_SLACK_WEBHOOK
+          valueFrom:
+            secretKeyRef:
+              name: logcost-slack-webhook
+              key: webhook-url
+        volumeMounts:
+        - name: logcost-data
+          mountPath: /var/log/logcost
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+
+      # Shared volume for LogCost stats
+      volumes:
+      - name: logcost-data
+        emptyDir: {}
+
+---
+# Slack webhook secret (create before deploying)
+# kubectl create secret generic logcost-slack-webhook \
+#   --from-literal=webhook-url='https://hooks.slack.com/services/YOUR/WEBHOOK/URL'
+apiVersion: v1
+kind: Secret
+metadata:
+  name: logcost-slack-webhook
+  namespace: default
+type: Opaque
+stringData:
+  webhook-url: "https://hooks.slack.com/services/TXXXXXXXX/BXXXXXXXX/XXXXXXXXXXXXXXXXXXXXXXXX"

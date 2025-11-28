@@ -60,6 +60,8 @@ spec:
         # Configure LogCost periodic flush in your app
         - name: LOGCOST_OUTPUT
           value: /var/log/logcost/stats.json
+        # IMPORTANT: Ensure stats.json is readable by sidecar (UID 1000)
+        # App container should use: umask 0022 so files are world-readable
         - name: LOGCOST_FLUSH_INTERVAL
           value: "300"  # 5 minutes
         - name: LOGCOST_MAX_FILE_SIZE
