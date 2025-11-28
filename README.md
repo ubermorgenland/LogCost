@@ -2,18 +2,20 @@
 
 **Your cloud logging bill is $2,000/month. One debug statement in a hot path is responsible for $800 of it.**
 
-LogCost finds expensive log statements in production Python services. Drop-in instrumentation (just `import logcost`) pinpoints which lines generate the most data, helping you cut cloud logging costs by 40-60% without guessing.
+LogCost finds expensive log statements by tracking and aggregating logs at the source code level. Drop-in instrumentation (just `import logcost`) pinpoints which lines generate the most data, helping you cut cloud logging costs by 40-60% without guessing.
 
 **Example:** A single `logger.debug(f"Processing {user_data}")` inside a request loop can log 50 MB/day at $15/month. LogCost shows you the exact file:line, call count, and bytes so you can fix the top 5 offenders and save hundreds monthly.
 
 ## Features
 
 - **Zero-config tracking** - Monkey-patches `logging` and `print` to measure file/line, level, message template, call count, and bytes
+- **Aggregation by location** - Logs from the same file:line:level are aggregated together, regardless of message content. This means a loop logging 1000 times shows as one entry with count=1000, not 1000 separate entries
 - **Thread-safe** - Lock-protected tracking works across concurrent requests
 - **Framework support** - Examples for Flask, FastAPI, Django, Kubernetes
 - **Export options** - JSON, CSV, Prometheus, HTML reports
 - **Cost analysis** - Compute GCP/AWS/Azure cost estimates and identify anti-patterns
 - **Performance** - Low overhead design for production use
+- **GCloud source attribution** - Preserves actual source file:line in logs, not wrapper attribution
 
 ## Quick Start
 
@@ -72,6 +74,27 @@ print("Debug output")  # print() is also tracked
 stats_path = logcost.export("/tmp/logcost_stats.json")
 ```
 
+### Controlling External Library Logging
+
+External libraries often emit DEBUG-level logs that can inflate logging costs without providing production value. Silence them selectively:
+
+```python
+import logging
+import logcost
+
+# Silence external library debug logs (production best practice)
+logging.getLogger("httpcore").setLevel(logging.WARNING)      # HTTP connection tracing
+logging.getLogger("httpx").setLevel(logging.WARNING)         # HTTP client
+logging.getLogger("anthropic").setLevel(logging.WARNING)     # Anthropic SDK
+logging.getLogger("urllib3").setLevel(logging.WARNING)       # urllib3
+
+# Your code's logs still tracked - just reduced noise from dependencies
+logger = logging.getLogger(__name__)
+logger.info("Important app event")  # Still tracked by LogCost
+```
+
+LogCost will still track these suppressed logs if they somehow get through, but setting appropriate levels prevents the noisy ones from being generated in the first place.
+
 ### Skipping Helper Modules
 
 If you wrap logging in helper utilities:
@@ -129,7 +152,8 @@ import logcost
 
 # Start periodic flush - automatically sends Slack notifications
 logcost.start_periodic_flush("/var/log/logcost/stats.json")
-# Notifications sent every 5 minutes (configurable via LOGCOST_FLUSH_INTERVAL)
+# Stats flushed every 5 minutes (LOGCOST_FLUSH_INTERVAL=300)
+# Notifications sent every 1 hour (LOGCOST_NOTIFICATION_INTERVAL=3600, configurable)
 ```
 
 Manual notification:
